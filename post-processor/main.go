@@ -26,6 +26,7 @@ import (
 	"github.ncsu.edu/jjuecks/vv8-post-processor/flow"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/mega"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/micro"
+	multiorigin "github.ncsu.edu/jjuecks/vv8-post-processor/multi_origin"
 )
 
 // Version is set during build (to the git hash of the compiled code)
@@ -59,6 +60,7 @@ var acceptedOutputFormats = map[string]formatAggregator{
 	"create_element":    {"CreateElement", elements.NewCreateElementAggregator},
 	"ufeatures":         {"MicroFeatureUsage", micro.NewFeatureUsageAggregator},
 	"flow":              {"flow", flow.NewAggregator},
+	"multiorigin":       {"MultiOrigin", multiorigin.NewAggregator},
 	"noop":              {"Noop", nullCtor},
 }
 
