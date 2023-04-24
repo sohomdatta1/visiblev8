@@ -18,12 +18,14 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo/gridfs"
 
+	"github.ncsu.edu/jjuecks/vv8-post-processor/adblock"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/callargs"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/causality"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/core"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/elements"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/features"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/flow"
+	"github.ncsu.edu/jjuecks/vv8-post-processor/fptp"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/mega"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/micro"
 	multiorigin "github.ncsu.edu/jjuecks/vv8-post-processor/multi_origin"
@@ -49,6 +51,8 @@ func nullCtor() (core.Aggregator, error) {
 
 // acceptedOutputFormats is the master map of supported aggregators and their short-names used by the CLI
 var acceptedOutputFormats = map[string]formatAggregator{
+	"adblock":           {"Adblock", adblock.NewAdblockAggregator},
+	"fptp":              {"FirstPartyToThirdParty", fptp.NewFptpAggregator},
 	"callargs":          {"CallArguments", callargs.NewCreateCallArgsAggregator},
 	"Mfeatures":         {"MegaFeatureUsage", mega.NewAggregator},
 	"features":          {"FeatureUsage", features.NewFeatureUsageAggregator},
