@@ -28,6 +28,7 @@ import (
 	"github.ncsu.edu/jjuecks/vv8-post-processor/fptp"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/mega"
 	"github.ncsu.edu/jjuecks/vv8-post-processor/micro"
+	"github.ncsu.edu/jjuecks/vv8-post-processor/xleaks"
 )
 
 // Version is set during build (to the git hash of the compiled code)
@@ -50,6 +51,7 @@ func nullCtor() (core.Aggregator, error) {
 
 // acceptedOutputFormats is the master map of supported aggregators and their short-names used by the CLI
 var acceptedOutputFormats = map[string]formatAggregator{
+	"xleaks":            {"XLeaks", xleaks.NewAggregator},
 	"adblock":           {"Adblock", adblock.NewAdblockAggregator},
 	"fptp":              {"FirstPartyToThirdParty", fptp.NewFptpAggregator},
 	"callargs":          {"CallArguments", callargs.NewCreateCallArgsAggregator},
