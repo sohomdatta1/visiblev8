@@ -191,243 +191,6 @@ index 3447991622a..1e3c3c2d14d 100644
    return GetPropertyWithReceiver(
        objectJSReceiver, name, receiver, SmiConstant(kReturnUndefined));
  }
-diff --git a/src/compiler/js-call-reducer.cc b/src/compiler/js-call-reducer.cc
-index 87b31d6dfc0..cc39776fcd5 100644
---- a/src/compiler/js-call-reducer.cc
-+++ b/src/compiler/js-call-reducer.cc
-@@ -3863,230 +3863,8 @@ FastApiCallFunctionVector CanOptimizeFastCall(
- 
- Reduction JSCallReducer::ReduceCallApiFunction(Node* node,
-                                                SharedFunctionInfoRef shared) {
--  JSCallNode n(node);
--  CallParameters const& p = n.Parameters();
--  int const argc = p.arity_without_implicit_args();
--  Node* target = n.target();
--  Node* global_proxy = jsgraph()->ConstantNoHole(
--      native_context().global_proxy_object(broker()), broker());
--  Node* receiver = (p.convert_mode() == ConvertReceiverMode::kNullOrUndefined)
--                       ? global_proxy
--                       : n.receiver();
--  Node* holder;
--  Node* context = n.context();
--  Effect effect = n.effect();
--  Control control = n.control();
--  FrameState frame_state = n.frame_state();
--
--  if (!shared.function_template_info(broker()).has_value()) {
--    TRACE_BROKER_MISSING(
--        broker(), "FunctionTemplateInfo for function with SFI " << shared);
--    return NoChange();
--  }
--
--  // See if we can optimize this API call to {shared}.
--  FunctionTemplateInfoRef function_template_info(
--      shared.function_template_info(broker()).value());
--
--  if (function_template_info.accept_any_receiver() &&
--      function_template_info.is_signature_undefined(broker())) {
--    // We might be able to
--    // optimize the API call depending on the {function_template_info}.
--    // If the API function accepts any kind of {receiver}, we only need to
--    // ensure that the {receiver} is actually a JSReceiver at this point,
--    // and also pass that as the {holder}. There are two independent bits
--    // here:
--    //
--    //  a. When the "accept any receiver" bit is set, it means we don't
--    //     need to perform access checks, even if the {receiver}'s map
--    //     has the "needs access check" bit set.
--    //  b. When the {function_template_info} has no signature, we don't
--    //     need to do the compatible receiver check, since all receivers
--    //     are considered compatible at that point, and the {receiver}
--    //     will be pass as the {holder}.
--    //
--    receiver = holder = effect = graph()->NewNode(
--        simplified()->ConvertReceiver(p.convert_mode()), receiver,
--        jsgraph()->ConstantNoHole(native_context(), broker()), global_proxy,
--        effect, control);
--  } else {
--    // Try to infer the {receiver} maps from the graph.
--    MapInference inference(broker(), receiver, effect);
--    if (inference.HaveMaps()) {
--      ZoneRefSet<Map> const& receiver_maps = inference.GetMaps();
--      MapRef first_receiver_map = receiver_maps[0];
--
--      // See if we can constant-fold the compatible receiver checks.
--      HolderLookupResult api_holder =
--          function_template_info.LookupHolderOfExpectedType(broker(),
--                                                            first_receiver_map);
--      if (api_holder.lookup == CallOptimization::kHolderNotFound) {
--        return inference.NoChange();
--      }
--
--      // Check that all {receiver_maps} are actually JSReceiver maps and
--      // that the {function_template_info} accepts them without access
--      // checks (even if "access check needed" is set for {receiver}).
--      //
--      // Note that we don't need to know the concrete {receiver} maps here,
--      // meaning it's fine if the {receiver_maps} are unreliable, and we also
--      // don't need to install any stability dependencies, since the only
--      // relevant information regarding the {receiver} is the Map::constructor
--      // field on the root map (which is different from the JavaScript exposed
--      // "constructor" property) and that field cannot change.
--      //
--      // So if we know that {receiver} had a certain constructor at some point
--      // in the past (i.e. it had a certain map), then this constructor is going
--      // to be the same later, since this information cannot change with map
--      // transitions.
--      //
--      // The same is true for the instance type, e.g. we still know that the
--      // instance type is JSObject even if that information is unreliable, and
--      // the "access check needed" bit, which also cannot change later.
--      CHECK(first_receiver_map.IsJSReceiverMap());
--      CHECK(!first_receiver_map.is_access_check_needed() ||
--            function_template_info.accept_any_receiver());
--
--      for (size_t i = 1; i < receiver_maps.size(); ++i) {
--        MapRef receiver_map = receiver_maps[i];
--        HolderLookupResult holder_i =
--            function_template_info.LookupHolderOfExpectedType(broker(),
--                                                              receiver_map);
--
--        if (api_holder.lookup != holder_i.lookup) return inference.NoChange();
--        DCHECK(holder_i.lookup == CallOptimization::kHolderFound ||
--               holder_i.lookup == CallOptimization::kHolderIsReceiver);
--        if (holder_i.lookup == CallOptimization::kHolderFound) {
--          DCHECK(api_holder.holder.has_value() && holder_i.holder.has_value());
--          if (!api_holder.holder->equals(*holder_i.holder)) {
--            return inference.NoChange();
--          }
--        }
--
--        CHECK(receiver_map.IsJSReceiverMap());
--        CHECK(!receiver_map.is_access_check_needed() ||
--              function_template_info.accept_any_receiver());
--      }
--
--      if (p.speculation_mode() == SpeculationMode::kDisallowSpeculation &&
--          !inference.RelyOnMapsViaStability(dependencies())) {
--        // We were not able to make the receiver maps reliable without map
--        // checks but doing map checks would lead to deopt loops, so give up.
--        return inference.NoChange();
--      }
--
--      // TODO(neis): The maps were used in a way that does not actually require
--      // map checks or stability dependencies.
--      inference.RelyOnMapsPreferStability(dependencies(), jsgraph(), &effect,
--                                          control, p.feedback());
--
--      // Determine the appropriate holder for the {lookup}.
--      holder = api_holder.lookup == CallOptimization::kHolderFound
--                   ? jsgraph()->ConstantNoHole(*api_holder.holder, broker())
--                   : receiver;
--    } else {
--      // We don't have enough information to eliminate the access check
--      // and/or the compatible receiver check, so use the generic builtin
--      // that does those checks dynamically. This is still significantly
--      // faster than the generic call sequence.
--      Builtin builtin_name;
--      if (function_template_info.accept_any_receiver()) {
--        DCHECK(!function_template_info.is_signature_undefined(broker()));
--        builtin_name = Builtin::kCallFunctionTemplate_CheckCompatibleReceiver;
--      } else if (function_template_info.is_signature_undefined(broker())) {
--        builtin_name = Builtin::kCallFunctionTemplate_CheckAccess;
--      } else {
--        builtin_name =
--            Builtin::kCallFunctionTemplate_CheckAccessAndCompatibleReceiver;
--      }
--
--      // The CallFunctionTemplate builtin requires the {receiver} to be
--      // an actual JSReceiver, so make sure we do the proper conversion
--      // first if necessary.
--      receiver = holder = effect = graph()->NewNode(
--          simplified()->ConvertReceiver(p.convert_mode()), receiver,
--          jsgraph()->ConstantNoHole(native_context(), broker()), global_proxy,
--          effect, control);
--
--      Callable callable = Builtins::CallableFor(isolate(), builtin_name);
--      auto call_descriptor = Linkage::GetStubCallDescriptor(
--          graph()->zone(), callable.descriptor(),
--          argc + 1 /* implicit receiver */, CallDescriptor::kNeedsFrameState);
--      node->RemoveInput(n.FeedbackVectorIndex());
--      node->InsertInput(graph()->zone(), 0,
--                        jsgraph()->HeapConstantNoHole(callable.code()));
--      node->ReplaceInput(
--          1, jsgraph()->ConstantNoHole(function_template_info, broker()));
--      node->InsertInput(graph()->zone(), 2,
--                        jsgraph()->Int32Constant(JSParameterCount(argc)));
--      node->ReplaceInput(3, receiver);       // Update receiver input.
--      node->ReplaceInput(6 + argc, effect);  // Update effect input.
--      NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
--      return Changed(node);
--    }
--  }
--
--  // TODO(turbofan): Consider introducing a JSCallApiCallback operator for
--  // this and lower it during JSGenericLowering, and unify this with the
--  // JSNativeContextSpecialization::InlineApiCall method a bit.
--  compiler::OptionalObjectRef maybe_callback_data =
--      function_template_info.callback_data(broker());
--  if (!maybe_callback_data.has_value()) {
--    TRACE_BROKER_MISSING(broker(), "call code for function template info "
--                                       << function_template_info);
--    return NoChange();
--  }
--
--  // Handles overloaded functions.
--
--  FastApiCallFunctionVector c_candidate_functions = CanOptimizeFastCall(
--      broker(), graph()->zone(), function_template_info, argc);
--  DCHECK_LE(c_candidate_functions.size(), 2);
--
--  // TODO(v8:13600): Support exception handling for FastApiCall nodes.
--  if (!c_candidate_functions.empty() &&
--      !NodeProperties::IsExceptionalCall(node)) {
--    FastApiCallReducerAssembler a(this, node, function_template_info,
--                                  c_candidate_functions, receiver, holder,
--                                  shared, target, argc, effect);
--    Node* fast_call_subgraph = a.ReduceFastApiCall();
--    ReplaceWithSubgraph(&a, fast_call_subgraph);
--
--    return Replace(fast_call_subgraph);
--  }
--
--  // Slow call
--
--  bool no_profiling = broker()->dependencies()->DependOnNoProfilingProtector();
--  Callable call_api_callback = Builtins::CallableFor(
--      isolate(), no_profiling ? Builtin::kCallApiCallbackOptimizedNoProfiling
--                              : Builtin::kCallApiCallbackOptimized);
--  CallInterfaceDescriptor cid = call_api_callback.descriptor();
--  auto call_descriptor =
--      Linkage::GetStubCallDescriptor(graph()->zone(), cid, argc + 1 /*
--     implicit receiver */, CallDescriptor::kNeedsFrameState);
--  ApiFunction api_function(function_template_info.callback(broker()));
--  ExternalReference function_reference = ExternalReference::Create(
--      &api_function, ExternalReference::DIRECT_API_CALL);
--
--  Node* continuation_frame_state = CreateInlinedApiFunctionFrameState(
--      jsgraph(), shared, target, context, receiver, frame_state);
--
--  node->RemoveInput(n.FeedbackVectorIndex());
--  node->InsertInput(graph()->zone(), 0,
--                    jsgraph()->HeapConstantNoHole(call_api_callback.code()));
--  node->ReplaceInput(1, jsgraph()->ExternalConstant(function_reference));
--  node->InsertInput(graph()->zone(), 2, jsgraph()->ConstantNoHole(argc));
--  node->InsertInput(
--      graph()->zone(), 3,
--      jsgraph()->ConstantNoHole(maybe_callback_data.value(), broker()));
--  node->InsertInput(graph()->zone(), 4, holder);
--  node->ReplaceInput(5, receiver);  // Update receiver input.
--  // 6 + argc is context input.
--  node->ReplaceInput(6 + argc + 1, continuation_frame_state);
--  node->ReplaceInput(6 + argc + 2, effect);
--  NodeProperties::ChangeOp(node, common()->Call(call_descriptor));
--  return Changed(node);
-+  // VisibleV8
-+  return NoChange();
- }
- 
- namespace {
 diff --git a/src/init/v8.cc b/src/init/v8.cc
 index 15540a75e7e..ada96bf0a1c 100644
 --- a/src/init/v8.cc
@@ -634,7 +397,7 @@ index a89acd16b26..c40ab44179b 100644
      Isolate* isolate, Handle<Object> object, Handle<Name> name,
      Handle<Object> value, Maybe<ShouldThrow> should_throw,
 diff --git a/src/objects/objects.cc b/src/objects/objects.cc
-index 8e013c2544e..991adfd8d5f 100644
+index 8e013c2544e..4a9cd4b9352 100644
 --- a/src/objects/objects.cc
 +++ b/src/objects/objects.cc
 @@ -1160,6 +1160,88 @@ MaybeHandle<Object> Object::GetLengthFromArrayLike(Isolate* isolate,
@@ -643,8 +406,8 @@ index 8e013c2544e..991adfd8d5f 100644
  
 +// VisibleV8
 +// static
-+MaybeHandle<Object> Object::VV8GetPropertyNoSideEffects(LookupIterator* it,
-+                                        bool is_global_reference) {
++MaybeHandle<Object> Object::VV8GetPropertyNoSideEffects(
++    LookupIterator* it, bool is_global_reference) {
 +  for (; it->IsFound(); it->Next()) {
 +    switch (it->state()) {
 +      case LookupIterator::NOT_FOUND:
@@ -780,7 +543,7 @@ index db3c6f09972..1e12b630867 100644
    LanguageMode language_mode = static_cast<LanguageMode>(args.smi_value_at(3));
    Handle<SharedFunctionInfo> outer_info(args.at<JSFunction>(2)->shared(),
 diff --git a/src/runtime/runtime-test.cc b/src/runtime/runtime-test.cc
-index 912b4069ac6..f0fc2452191 100644
+index 912b4069ac6..5c9f9d795e1 100644
 --- a/src/runtime/runtime-test.cc
 +++ b/src/runtime/runtime-test.cc
 @@ -2,16 +2,30 @@
@@ -788,23 +551,22 @@ index 912b4069ac6..f0fc2452191 100644
  // found in the LICENSE file.
  
 +#include <pthread.h>
++#include <signal.h>
  #include <stdio.h>
 +#include <sys/syscall.h>  // Horrible VisV8 hack--forgive me...
 +#include <unistd.h>
-+#include <signal.h>
  
 +#include <algorithm>
 +#include <cstdint>
++#include <fstream>
  #include <iomanip>
  #include <memory>
--
-+#include <fstream>
++#include <mutex>
 +#include <sstream>
 +#include <string>
 +#include <strstream>
 +#include <vector>
-+#include <mutex>
-+
+ 
 +#include "build/build_config.h"
  #include "include/v8-function.h"
  #include "include/v8-profiler.h"
@@ -834,7 +596,7 @@ index 912b4069ac6..f0fc2452191 100644
  
  #ifdef V8_ENABLE_MAGLEV
  #include "src/maglev/maglev.h"
-@@ -1566,6 +1588,678 @@ RUNTIME_FUNCTION(Runtime_TraceExit) {
+@@ -1566,6 +1588,683 @@ RUNTIME_FUNCTION(Runtime_TraceExit) {
    return obj;  // return TOS
  }
  
@@ -948,7 +710,8 @@ index 912b4069ac6..f0fc2452191 100644
 +      Handle<String> ctor = JSReceiver::GetConstructorName(isolate, rcvr);
 +      out << '{';
 +      out << rcvr->GetOrCreateIdentityHash(isolate).value();
-+      if (iter_obj && (strcmp(ctor->ToCString().get(), "Object") == 0 || strcmp(ctor->ToCString().get(), "Array") == 0)) {
++      if (iter_obj && (strcmp(ctor->ToCString().get(), "Object") == 0 ||
++                       strcmp(ctor->ToCString().get(), "Array") == 0)) {
 +        // We are encountering this object for the first time, iterate it!
 +        Handle<FixedArray> contents;
 +        do {
@@ -969,7 +732,8 @@ index 912b4069ac6..f0fc2452191 100644
 +          myPrintUC16(*key, out, 0, max_len);
 +          out << "\\:";
 +          do {
-+            if (!(Object::VV8GetPropertyOrElementWithNoSideEffects(isolate, rcvr, key))
++            if (!(Object::VV8GetPropertyOrElementWithNoSideEffects(isolate,
++                                                                   rcvr, key))
 +                     .ToHandle(&property)) {
 +              DCHECK((isolate)->has_exception());
 +              return;
@@ -1030,19 +794,19 @@ index 912b4069ac6..f0fc2452191 100644
 +    // current Thread object from V8?]
 +    char thread_name[16] = "<unknown>";
 +#if BUILDFLAG(IS_ANDROID)
-+    if ( prctl(PR_GET_NAME, thread_name, 0, 0, 0) ) {
++    if (prctl(PR_GET_NAME, thread_name, 0, 0, 0)) {
 +      perror("prctl");
 +    }
 +    char log_name[] = "/sdcard/Documents/vv8-%ld-%d-%d-%s.%%d.log";
 +#else
-+  if (pthread_getname_np(pthread_self(), thread_name, sizeof(thread_name))) {
++    if (pthread_getname_np(pthread_self(), thread_name, sizeof(thread_name))) {
 +      perror("pthread_getname_np");
 +    }
 +    char log_name[] = "vv8-%ld-%d-%d-%s.%%d.log";
 +#endif
 +    // Use thread name et al. to construct our log name pattern
-+    snprintf(log_name_pattern, sizeof log_name_pattern,
-+             log_name, (long)base::OS::TimeCurrentMillis(),
++    snprintf(log_name_pattern, sizeof log_name_pattern, log_name,
++             (long)base::OS::TimeCurrentMillis(),
 +             base::OS::GetCurrentProcessId(), base::OS::GetCurrentThreadId(),
 +             thread_name);
 +
@@ -1147,12 +911,15 @@ index 912b4069ac6..f0fc2452191 100644
 +      // Littered with evil hacks to work around WebKit/Blink's brokenness
 +      // w.r.t. initializing its Window object
 +      if (native_global->GetEmbedderField(1).IsSmi()) {
-+        auto location = JSReceiver::GetProperty(isolate, native_global, "location");
++        auto location =
++            JSReceiver::GetProperty(isolate, native_global, "location");
 +        Handle<Object> location_value;
-+        if ( location.ToHandle(&location_value) ) {
-+          Handle<JSReceiver> location_jsrecv =  Handle<JSReceiver>::cast(location_value);
++        if (location.ToHandle(&location_value)) {
++          Handle<JSReceiver> location_jsrecv =
++              Handle<JSReceiver>::cast(location_value);
 +          auto href = JSReceiver::GetProperty(isolate, location_jsrecv, "href");
-+          Tagged<Object> security_token = isolate->context()->native_context()->security_token();
++          Tagged<Object> security_token =
++              isolate->context()->native_context()->security_token();
 +          Handle<Object> origin_value;
 +          if (href.ToHandle(&origin_value)) {
 +            out << '@';
@@ -1181,7 +948,8 @@ index 912b4069ac6..f0fc2452191 100644
 +    print_origin(isolate, origin_url_scratch);
 +
 +    // Now, compare with our cached copy
-+    if (strcmp(origin_url_scratch.str().c_str(), last_origin_url.str().c_str()) != 0) {
++    if (strcmp(origin_url_scratch.str().c_str(),
++               last_origin_url.str().c_str()) != 0) {
 +      // Change!  Replace our cached copy and log it
 +      last_origin_url.seekp(0);
 +      last_origin_url.clear();
@@ -1364,10 +1132,9 @@ index 912b4069ac6..f0fc2452191 100644
 +// builtin)
 +void visv8_log_property_get(Isolate* isolate, int call_site, Tagged<Object> obj,
 +                            Tagged<Object> prop) {
-+  VisV8Context vctx(isolate);
-+  VisV8Logger vlog(vctx);
-+
 +  if (visv8_should_log_object(obj)) {
++    VisV8Context vctx(isolate);
++    VisV8Logger vlog(vctx);
 +    // Peek at the call stack to see our offset within the active script
 +    if (call_site < 0) {
 +      DebuggableStackFrameIterator it(isolate);
@@ -1404,10 +1171,9 @@ index 912b4069ac6..f0fc2452191 100644
 +// builtin)
 +void visv8_log_property_set(Isolate* isolate, int call_site, Tagged<Object> obj,
 +                            Tagged<Object> prop, Tagged<Object> value) {
-+  VisV8Context vctx(isolate);
-+  VisV8Logger vlog(vctx);
-+
 +  if (visv8_should_log_object(obj)) {
++    VisV8Context vctx(isolate);
++    VisV8Logger vlog(vctx);
 +    // Peek at the call stack to see our offset within the active script
 +    if (call_site < 0) {
 +      DebuggableStackFrameIterator it(isolate);
@@ -1445,15 +1211,13 @@ index 912b4069ac6..f0fc2452191 100644
 +
 +// Hack to log almost all scripts that have any kind of function call
 +RUNTIME_FUNCTION(Runtime_TraceFunctionCall) {
-+  VisV8Context vctx(isolate);
-+  VisV8Logger vlog(vctx);
-+
 +  return ReadOnlyRoots(isolate).undefined_value();
 +}
 +
 +// Special hack to allow callbacks from HandleApiCall hooks
-+void visv8_log_api_call(Isolate* isolate, bool is_constructor, Tagged<HeapObject> func,
-+                        Tagged<Object> receiver, Address* argv, int argc) {
++void visv8_log_api_call(Isolate* isolate, bool is_constructor,
++                        Tagged<HeapObject> func, Tagged<Object> receiver,
++                        Address* argv, int argc) {
 +  int call_site = -1;
 +  VisV8Context vctx(isolate);
 +
@@ -1477,7 +1241,8 @@ index 912b4069ac6..f0fc2452191 100644
 +    }
 +    for (int i = 0; i < argc; ++i) {
 +      vlog.out() << ':';
-+      visv8_to_string(isolate, vlog.out(), (Tagged<Object>)(argv)[i], true, -1, true);
++      visv8_to_string(isolate, vlog.out(), (Tagged<Object>)(argv)[i], true, -1,
++                      true);
 +    }
 +    vlog.out() << '\n';
 +  }
@@ -1501,9 +1266,11 @@ index 912b4069ac6..f0fc2452191 100644
 +  }
 +
 +  int argc_integer = Smi::ToInt(argc) - 1;
-+  Tagged<JSReceiver> reciever = (Tagged<JSReceiver>)((Tagged<JSReceiver> *)argv_ptr_val)[-1];
++  Tagged<JSReceiver> reciever =
++      (Tagged<JSReceiver>)((Tagged<JSReceiver>*)argv_ptr_val)[-1];
 +
-+  visv8_log_api_call(isolate, false, target, reciever, (Address *)argv_ptr_val, argc_integer >= 0 ? argc_integer : 0);
++  visv8_log_api_call(isolate, false, target, reciever, (Address*)argv_ptr_val,
++                     argc_integer >= 0 ? argc_integer : 0);
 +  return ReadOnlyRoots(isolate).undefined_value();
 +}
 +
